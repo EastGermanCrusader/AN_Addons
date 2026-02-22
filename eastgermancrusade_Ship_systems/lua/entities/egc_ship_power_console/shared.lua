@@ -1,9 +1,0 @@
-ENT.Type = "anim"
-ENT.Base = "base_gmodentity"
-ENT.PrintName = "Energieverteilung (Brücke)"
-ENT.Author = "EastGermanCrusader"
-ENT.Category = "EastGermanCrusader"
-ENT.Spawnable = true
-ENT.AdminOnly = false
-ENT.Instructions = "Benutzen zum Öffnen des Energie-Terminals."
-ENT.Purpose = "Brücken-Crew: Energie zwischen Schildsektoren umleiten."
