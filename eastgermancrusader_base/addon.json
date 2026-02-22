@@ -1,0 +1,10 @@
+{
+    "title": "EastGermanCrusader Base",
+    "type": "addon",
+    "tags": [ "base", "crusader" ],
+    "ignore": [
+        "*.psd",
+        "*.vcproj",
+        "*.svn"
+    ]
+}

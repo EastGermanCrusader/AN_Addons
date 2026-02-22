@@ -1,0 +1,5 @@
+"VertexLitGeneric"
+{
+	"$basetexture" "models/chappi/cookie/cookie_tail"
+	"$bumpmap" "models/chappi/cookie/cookie_tail_n"
+}

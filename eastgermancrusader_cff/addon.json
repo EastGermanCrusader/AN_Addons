@@ -1,0 +1,12 @@
+{
+    "title": "EastGermanCrusader CFF (Call For Fire)",
+    "type": "addon",
+    "tags": [ "roleplay", "military", "combat" ],
+    "ignore": [
+        "*.psd",
+        "*.vcproj",
+        "*.svn",
+        "*.git",
+        "README.md"
+    ]
+}

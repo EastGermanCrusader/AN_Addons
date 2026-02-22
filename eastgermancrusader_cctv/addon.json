@@ -1,0 +1,11 @@
+{
+    "title": "EastGermanCrusader CCTV System (Optimiert)",
+    "type": "addon",
+    "tags": [ "roleplay", "build" ],
+    "ignore": [
+        "*.psd",
+        "*.vcproj",
+        "*.svn",
+        "*.md"
+    ]
+}

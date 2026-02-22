@@ -1,0 +1,16 @@
+{
+	"title": "EastGermanCrusader LVS Overhaul",
+	"type": "ServerContent",
+	"tags": [
+		"scenic",
+		"realism"
+	],
+	"ignore": [
+		"*.psd",
+		"*.xcf",
+		"*.blend",
+		"*.git*",
+		"*.md",
+		"*.txt"
+	]
+}

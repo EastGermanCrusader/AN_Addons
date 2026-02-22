@@ -1,0 +1,12 @@
+"VertexlitGeneric"
+{
+	"$basetexture" "models/gb4/mortar_stuff/tube"
+	
+	"$bumpmap" "models/gb4/mortar_stuff/tube_NRM"
+
+	"$envmap" "env_cubemap"
+	"$normalmapalphaenvmapmask" "1"
+	"$envmaptint" "[.13 .13 .13]"
+	"$envmapcontrast" .1
+	"$envmapsaturation" 0.1
+}

@@ -1,0 +1,11 @@
+"VertexlitGeneric"
+{
+	"$basetexture" "models/gb4/mortar_stuff/crate"
+	
+	"$bumpmap" "models/gb4/mortar_stuff/crate_NRM"
+
+	"$envmap" "env_cubemap"
+	"$normalmapalphaenvmapmask" "1"
+	"$envmaptint" "[.1 .1 .1]"
+
+}

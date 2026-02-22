@@ -1,0 +1,10 @@
+"VertexLitGeneric"
+{
+	"$basetexture" "models/castlerubaut/wire_texture"
+	"$surfaceprop" "metal"
+	"$translucent" 1
+	"$model" 1
+
+
+}
+
