@@ -1,16 +1,21 @@
 --[[
-    EastGermanCrusader Ship Shield System
-    =====================================
+    EastGermanCrusader Ship Shield System (Hull-Wrapping)
+    =====================================================
     
-    KONZEPT:
-    - Schildgenerator-Entity als physische Quelle des Schilds
-    - Hull-Punkte (LMB): Definieren die Außengrenze des Schilds
-    - Gate-Punkte (RMB): Markieren Durchlass-Zonen (Hangar-Tore)
+    KONZEPT "Hull-Wrapping":
+    - Mit dem Tool setzt du nur die Eckpunkte der Schild-Segmente.
+    - Das Tool / der Mesh-Generator verbindet diese Punkte zu einem Prisma.
+    - Node-Entity (N): Kleines Hilfs-Entity an der Hülle (Eckpunkt).
+    - Sektor-Entity: Liest Node-Positionen und erstellt unsichtbares
+      PhysicsInitMultiConvex-Entity → fängt Projektile vor der Map ab.
     
-    FUNKTIONSWEISE:
-    - Schild blockiert Geschosse und Props von außen
-    - Gate-Bereiche lassen Props durch (auch bei aktivem Schild)
-    - System scannt automatisch die Map-Geometrie
+    - Hull-Punkte (LMB): Orientierung + Sektor aus diesen Punkten (min. 4).
+    - Gate-Punkte (RMB): Durchlass-Zonen (Hangar-Tore).
+    
+    Nur Nodes + Gate-Flächen:
+    - Nodes (LMB) geben Form und Volumen der Venator vor.
+    - Schild orientiert sich grob und klobig an den Nodes (ein Convex um alle).
+    - Gates = Flächen mit 4–8 Knoten = gültige Form (Durchlass, z. B. Hangar).
 ]]
 
 if SERVER then
@@ -85,6 +90,8 @@ EGC_SHIP.Config = {
     -- ===================
     -- PERFORMANCE
     -- ===================
+    DrawShieldSectors = false,          -- true = Sektor-Entities im Editor sichtbar (Debug)
+    SectorNodeRadius = 5000,            -- Radius zum Finden von Schild-Nodes (Sektor aus Nodes)
     CollisionCheckInterval = 0.1,       -- Sekunden zwischen Kollisions-Checks
     RegenTickInterval = 0.5,            -- Sekunden zwischen Regen-Ticks
     BroadcastInterval = 0.25,           -- Sekunden zwischen Client-Updates
@@ -112,4 +119,8 @@ if SERVER then
     util.AddNetworkString("EGC_Shield_ToolClear")
     util.AddNetworkString("EGC_Shield_ScanResult")
     util.AddNetworkString("EGC_Shield_RequestSync")
+    util.AddNetworkString("EGC_Shield_CreateSectorFromNodes")
+    util.AddNetworkString("EGC_Shield_PlaceNode")
+    util.AddNetworkString("EGC_Shield_SectorMesh")
+    util.AddNetworkString("EGC_Shield_BuildFromNodes")
 end

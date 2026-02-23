@@ -177,6 +177,40 @@ net.Receive("EGC_Shield_ToolFinish", function(len, ply)
         net.Send(ply)
         return
     end
+
+    if mode == "poly" then
+        local numFaces = net.ReadUInt(16)
+        if numFaces == 0 then
+            net.Start("EGC_Shield_ScanResult")
+            net.WriteBool(false)
+            net.WriteUInt(0, 16)
+            net.Send(ply)
+            return
+        end
+        local faces = {}
+        for i = 1, numFaces do
+            local a = net.ReadUInt(16)
+            local b = net.ReadUInt(16)
+            local c = net.ReadUInt(16)
+            if a >= 1 and a <= #points and b >= 1 and b <= #points and c >= 1 and c <= #points then
+                table.insert(faces, { a, b, c })
+            end
+        end
+        if #faces == 0 then
+            net.Start("EGC_Shield_ScanResult")
+            net.WriteBool(false)
+            net.WriteUInt(0, 16)
+            net.Send(ply)
+            return
+        end
+        generator:CreatePolyShieldFromTriangles(points, faces)
+        net.Start("EGC_Shield_ScanResult")
+        net.WriteBool(true)
+        net.WriteUInt(#faces, 16)
+        net.Send(ply)
+        BroadcastGeneratorSync(generator)
+        return
+    end
     
     if mode == "hull" then
         -- Hull-Scan durchführen
@@ -215,6 +249,110 @@ net.Receive("EGC_Shield_ToolFinish", function(len, ply)
         if success then
             BroadcastGeneratorSync(generator)
         end
+    end
+end)
+
+-- Schild aus Nodes bauen (grob/klobig) + Gates (4–8 Knoten pro Gate) anwenden
+net.Receive("EGC_Shield_BuildFromNodes", function(len, ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+
+    local entIndex = net.ReadUInt(16)
+    local generator = Entity(entIndex)
+    if not IsValid(generator) or generator:GetClass() ~= "egc_shield_generator" then
+        if IsValid(ply) then ply:ChatPrint("[EGC Shield] Ungültiger Generator.") end
+        return
+    end
+
+    local radius = (EGC_SHIP.Config and EGC_SHIP.Config.SectorNodeRadius) or 5000
+    local center = generator:GetPos()
+    local allEnts = ents.FindInSphere(center, radius)
+    local nodePositions = {}
+    for _, ent in ipairs(allEnts) do
+        if IsValid(ent) and ent:GetClass() == "egc_shield_node" then
+            table.insert(nodePositions, ent:GetPos())
+        end
+    end
+
+    if #nodePositions < 4 then
+        if IsValid(ply) then
+            ply:ChatPrint("[EGC Shield] Mindestens 4 Nodes im Radius " .. radius .. " nötig. Gefunden: " .. #nodePositions)
+        end
+        return
+    end
+
+    -- Schild grob/klobig aus allen Nodes (ein Convex um die Nodes)
+    generator:RemoveShieldSectors()
+    generator:CreateShieldSectorFromPoints(nodePositions)
+    generator:SetHullData(nodePositions, nodePositions, true)
+
+    -- Gates (4–8 Punkte pro Gate) anwenden – bestehende Gates ersetzen
+    local genData = generator:GetGeneratorData()
+    if genData then genData.gates = {} end
+    generator:ClearGates()
+
+    local numGates = net.ReadUInt(16)
+    for _ = 1, numGates do
+        local numPoints = net.ReadUInt(16)
+        if numPoints >= 4 and numPoints <= 8 then
+            local points = {}
+            for i = 1, numPoints do
+                local p = net.ReadVector()
+                if EGC_SHIP.ValidateVector(p) then table.insert(points, p) end
+            end
+            if #points >= 4 and #points <= 8 then
+                generator:AddGate(points, points)
+            end
+        end
+    end
+
+    BroadcastGeneratorSync(generator)
+    if IsValid(ply) then
+        ply:ChatPrint("[EGC Shield] Schild aus " .. #nodePositions .. " Nodes + " .. numGates .. " Gates erstellt.")
+    end
+end)
+
+-- Schild-Node platzieren
+net.Receive("EGC_Shield_PlaceNode", function(len, ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+    local pos = net.ReadVector()
+    if not EGC_SHIP.ValidateVector(pos) then return end
+    local node = ents.Create("egc_shield_node")
+    if not IsValid(node) then return end
+    node:SetPos(pos)
+    node:Spawn()
+end)
+
+-- Sektor aus Nodes erstellen (Hull-Wrapping: Nodes = Eckpunkte)
+net.Receive("EGC_Shield_CreateSectorFromNodes", function(len, ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+
+    local entIndex = net.ReadUInt(16)
+    local generator = Entity(entIndex)
+    if not IsValid(generator) or generator:GetClass() ~= "egc_shield_generator" then
+        if IsValid(ply) then ply:ChatPrint("[EGC Shield] Ungültiger Generator.") end
+        return
+    end
+
+    local radius = (EGC_SHIP.Config and EGC_SHIP.Config.SectorNodeRadius) or 5000
+    local center = generator:GetPos()
+    local nodes = ents.FindInSphere(center, radius)
+    local points = {}
+    for _, ent in ipairs(nodes) do
+        if IsValid(ent) and ent:GetClass() == "egc_shield_node" then
+            table.insert(points, ent:GetPos())
+        end
+    end
+
+    if #points < 4 then
+        if IsValid(ply) then
+            ply:ChatPrint("[EGC Shield] Mindestens 4 Schild-Nodes im Radius " .. radius .. " nötig. Gefunden: " .. #points)
+        end
+        return
+    end
+
+    generator:CreateShieldSectorFromPoints(points)
+    if IsValid(ply) then
+        ply:ChatPrint("[EGC Shield] Sektor aus " .. #points .. " Nodes erstellt.")
     end
 end)
 
@@ -423,6 +561,9 @@ function EGC_SHIP.SaveAllGenerators()
             sectorName = ent:GetSectorName(),
             hullPoints = genData.hullPoints,
             hullMesh = genData.hullMesh,
+            sectorPoints = genData.sectorPoints,
+            polyVertices = genData.polyVertices,
+            polyFaces = genData.polyFaces,
             gates = genData.gates,
         })
     end
@@ -458,15 +599,23 @@ function EGC_SHIP.LoadAllGenerators()
             ent:Spawn()
             ent:SetSectorName(genSave.sectorName or "Sektor")
             
-            -- Daten wiederherstellen
+            -- Daten wiederherstellen (Hull-Wrapping: Sektor aus gespeicherten Punkten)
             timer.Simple(0.1, function()
                 if IsValid(ent) then
-                    ent:SetHullData(genSave.hullPoints, genSave.hullMesh)
-                    
+                    ent:SetHullData(genSave.hullPoints, genSave.hullMesh, true)
+                    if genSave.polyVertices and genSave.polyFaces and #genSave.polyVertices >= 3 and #genSave.polyFaces > 0 then
+                        ent:CreatePolyShieldFromTriangles(genSave.polyVertices, genSave.polyFaces)
+                    else
+                        local sectorPoints = genSave.sectorPoints or genSave.hullPoints
+                        if sectorPoints and #sectorPoints >= 4 then
+                            ent:CreateShieldSectorFromPoints(sectorPoints)
+                        end
+                    end
+
                     for _, gate in ipairs(genSave.gates or {}) do
                         ent:AddGate(gate.points, gate.mesh)
                     end
-                    
+
                     BroadcastGeneratorSync(ent)
                 end
             end)

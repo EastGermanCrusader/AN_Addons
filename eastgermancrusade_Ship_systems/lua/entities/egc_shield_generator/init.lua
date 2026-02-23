@@ -57,7 +57,9 @@ end
 
 function ENT:UnregisterGenerator()
     if not EGC_SHIP then return end
-    
+
+    self:RemoveShieldSectors()
+
     local entIndex = self:EntIndex()
     if EGC_SHIP.Generators[entIndex] then
         EGC_SHIP.Generators[entIndex] = nil
@@ -238,19 +240,96 @@ function ENT:OnTakeDamage(dmginfo)
     end
 end
 
--- Hull/Gate-Daten setzen (vom Tool)
-function ENT:SetHullData(hullPoints, hullMesh)
+-- Poly-Shield: Erstellt Sektor aus Vertices + Dreiecks-Indizes (exakte Kanten)
+function ENT:CreatePolyShieldFromTriangles(vertices, faces)
+    local genData = self:GetGeneratorData()
+    if not genData or not vertices or #vertices < 3 or not faces or #faces == 0 then return nil end
+
+    local triangles = {}
+    for _, f in ipairs(faces) do
+        if #f >= 3 and f[1] >= 1 and f[1] <= #vertices and f[2] >= 1 and f[2] <= #vertices and f[3] >= 1 and f[3] <= #vertices then
+            table.insert(triangles, {
+                vertices[f[1]],
+                vertices[f[2]],
+                vertices[f[3]],
+            })
+        end
+    end
+    if #triangles == 0 then return nil end
+
+    local sector = ents.Create("egc_shield_sector")
+    if not IsValid(sector) then return nil end
+    sector:SetPos(vertices[1])
+    sector:Spawn()
+    sector:SetMeshTriangles(triangles)
+    sector:SetGenerator(self)
+
+    self:RemoveShieldSectors()
+    genData.sectors = { sector }
+    genData.sectorPoints = nil
+    genData.polyVertices = vertices
+    genData.polyFaces = faces
+
+    -- Bounds für Ray-Check (optional)
+    genData.hullCenter, genData.hullRadius = EGC_SHIP.CalculateBounds(vertices)
+    genData.hullMesh = vertices
+
+    print("[EGC Shield] Poly-Shield erstellt: " .. #triangles .. " Dreiecke, " .. #vertices .. " Vertices")
+    return sector
+end
+
+-- Hull-Wrapping: Erstellt ein physisches Sektor-Entity aus Punkten (Prisma)
+function ENT:CreateShieldSectorFromPoints(points)
+    local genData = self:GetGeneratorData()
+    if not genData or not points or #points < 4 then return nil end
+
+    local sector = ents.Create("egc_shield_sector")
+    if not IsValid(sector) then return nil end
+
+    sector:SetPos(points[1]) -- wird in GenerateFromPoints auf Zentrum gesetzt
+    sector:Spawn()
+    sector:GenerateFromPoints(points)
+    sector:SetGenerator(self)
+
+    genData.sectors = genData.sectors or {}
+    table.insert(genData.sectors, sector)
+    genData.sectorPoints = points
+
+    print("[EGC Shield] Sektor aus " .. #points .. " Punkten erstellt (Hull-Wrapping)")
+    return sector
+end
+
+-- Alte Sektor-Entities entfernen
+function ENT:RemoveShieldSectors()
+    local genData = self:GetGeneratorData()
+    if not genData or not genData.sectors then return end
+    for _, sector in ipairs(genData.sectors) do
+        if IsValid(sector) then sector:Remove() end
+    end
+    genData.sectors = {}
+end
+
+-- Hull/Gate-Daten setzen (vom Tool). skipSectorCreation = true beim Laden aus Save.
+function ENT:SetHullData(hullPoints, hullMesh, skipSectorCreation)
     local genData = self:GetGeneratorData()
     if not genData then return end
-    
+
     genData.hullPoints = hullPoints or {}
     genData.hullMesh = hullMesh or {}
-    
+
     -- Bounds berechnen
     if #genData.hullMesh > 0 then
         genData.hullCenter, genData.hullRadius = EGC_SHIP.CalculateBounds(genData.hullMesh)
     end
-    
+
+    -- Hull-Wrapping: Physischen Sektor aus Orientierungspunkten erstellen (Prisma)
+    if not skipSectorCreation then
+        self:RemoveShieldSectors()
+        if #(hullPoints or {}) >= 4 then
+            self:CreateShieldSectorFromPoints(hullPoints)
+        end
+    end
+
     print("[EGC Shield] Hull-Daten gesetzt: " .. #genData.hullMesh .. " Mesh-Punkte")
 end
 

@@ -36,6 +36,12 @@ function EGC_SHIP.CreateGeneratorData(entIndex)
         -- Sektor-Info
         sectorName = "default",
         sectorType = "custom",
+
+        -- Hull-Wrapping / Poly-Shield
+        sectors = {},
+        sectorPoints = {},
+        polyVertices = {},
+        polyFaces = {},   -- { {i,j,k}, ... } 1-based Indizes
     }
 end
 
