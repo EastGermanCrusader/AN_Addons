@@ -59,9 +59,9 @@ EGC_SHIP.Config = {
     -- ===================
     -- AUTO-SCAN
     -- ===================
-    ScanResolution = 50,                -- Units zwischen Scan-Punkten
+    ScanResolution = 50,                -- Units zwischen Scan-Punkten (kleiner = feiner)
     ScanHeight = 500,                   -- Vertikale Scan-Reichweite
-    MaxHullPoints = 128,                -- Max. Punkte für Hull-Mesh
+    MaxHullPoints = 256,               -- Max. Punkte für Hull-Mesh (nach Optimierung)
     MaxGatePoints = 32,                 -- Max. Punkte pro Gate
     MaxGatesPerGenerator = 8,           -- Max. Gates pro Generator
     

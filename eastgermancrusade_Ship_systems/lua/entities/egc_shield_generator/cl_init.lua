@@ -270,10 +270,10 @@ net.Receive("EGC_Shield_ScanResult", function()
     local numPoints = net.ReadUInt(16)
     
     if success then
-        notification.AddLegacy("Schild erstellt: " .. numPoints .. " Punkte!", NOTIFY_GENERIC, 4)
+        notification.AddLegacy("Hull gescannt: " .. numPoints .. " Punkte!", NOTIFY_GENERIC, 4)
         surface.PlaySound("buttons/button14.wav")
     else
-        notification.AddLegacy("Fehlgeschlagen (kein Admin? / zu wenig Punkte?)", NOTIFY_ERROR, 4)
+        notification.AddLegacy("Scan fehlgeschlagen!", NOTIFY_ERROR, 3)
         surface.PlaySound("buttons/button10.wav")
     end
 end)

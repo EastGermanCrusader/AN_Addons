@@ -33,159 +33,36 @@ if CLIENT then
         currentGate = {},
         targetGenerator = nil,
     }
+    -- Stellt sicher, dass die Arrays immer existieren (falls etwas sie überschreibt)
+    local p = EGC_SHIP._toolPreview
+    if not p.hullPoints then p.hullPoints = {} end
+    if not p.gatePoints then p.gatePoints = {} end
+    if not p.currentGate then p.currentGate = {} end
 end
 
 -- ============================================================================
--- LINKSKLICK: Hull-Punkt setzen ODER auf Generator scannen
+-- LINKSKLICK: Nur Rückgabewert für Tool-Gun-Anzeige (echte Logik im Client-Hook)
+-- In Singleplayer wird LeftClick nur auf dem Server aufgerufen, daher läuft
+-- die CLIENT-Logik dort nie. Die Klick-Verarbeitung erfolgt in EGC_Shield_ToolInput.
 -- ============================================================================
 function TOOL:LeftClick(tr)
     if not IsFirstTimePredicted() then return false end
-    
-    local ent = tr.Entity
-    
-    -- Wenn auf Generator geklickt → Hull-Scan starten
-    if IsValid(ent) and ent:GetClass() == "egc_shield_generator" then
-        if CLIENT then
-            local preview = EGC_SHIP._toolPreview
-            if #preview.hullPoints < 3 then
-                notification.AddLegacy("Mindestens 3 Hull-Punkte setzen!", NOTIFY_ERROR, 3)
-                surface.PlaySound("buttons/button10.wav")
-                return false
-            end
-            
-            -- Sende Scan-Anfrage
-            local resolution = tonumber(self:GetClientInfo("scan_resolution")) or 50
-            
-            net.Start("EGC_Shield_ToolFinish")
-            net.WriteUInt(ent:EntIndex(), 16)
-            net.WriteString("hull")
-            net.WriteUInt(resolution, 16)
-            net.WriteUInt(#preview.hullPoints, 16)
-            for _, p in ipairs(preview.hullPoints) do
-                net.WriteVector(p)
-            end
-            net.SendToServer()
-            
-            preview.targetGenerator = ent:EntIndex()
-            surface.PlaySound("buttons/button9.wav")
-        end
-        return true
-    end
-    
-    -- Sonst: Hull-Punkt setzen
-    if CLIENT then
-        local pos = tr.HitPos
-        local preview = EGC_SHIP._toolPreview
-        
-        if #preview.hullPoints >= 32 then
-            notification.AddLegacy("Max. Hull-Punkte erreicht!", NOTIFY_ERROR, 2)
-            return false
-        end
-        
-        table.insert(preview.hullPoints, Vector(pos.x, pos.y, pos.z))
-        surface.PlaySound("buttons/button15.wav")
-        
-        -- An Server senden
-        net.Start("EGC_Shield_ToolPoint")
-        net.WriteString("hull")
-        net.WriteVector(pos)
-        net.SendToServer()
-    end
-    
-    return true
+    return true  -- Beam/Animation anzeigen; Aktion wird im Client-Hook ausgeführt
 end
 
 -- ============================================================================
--- RECHTSKLICK: Gate-Punkt setzen ODER Gate abschließen
+-- RECHTSKLICK: Nur Rückgabewert (echte Logik im Client-Hook)
 -- ============================================================================
 function TOOL:RightClick(tr)
     if not IsFirstTimePredicted() then return false end
-    
-    local ent = tr.Entity
-    
-    -- Wenn auf Generator geklickt UND Gate-Punkte vorhanden → Gate erstellen
-    if IsValid(ent) and ent:GetClass() == "egc_shield_generator" then
-        if CLIENT then
-            local preview = EGC_SHIP._toolPreview
-            if #preview.currentGate < 3 then
-                notification.AddLegacy("Mindestens 3 Gate-Punkte setzen!", NOTIFY_ERROR, 3)
-                surface.PlaySound("buttons/button10.wav")
-                return false
-            end
-            
-            -- Sende Gate-Erstellung
-            net.Start("EGC_Shield_ToolFinish")
-            net.WriteUInt(ent:EntIndex(), 16)
-            net.WriteString("gate")
-            net.WriteUInt(0, 16)  -- Keine Resolution für Gates
-            net.WriteUInt(#preview.currentGate, 16)
-            for _, p in ipairs(preview.currentGate) do
-                net.WriteVector(p)
-            end
-            net.SendToServer()
-            
-            -- Gate-Punkte zurücksetzen, in Liste speichern
-            table.insert(preview.gatePoints, table.Copy(preview.currentGate))
-            preview.currentGate = {}
-            
-            surface.PlaySound("buttons/button14.wav")
-            notification.AddLegacy("Gate erstellt!", NOTIFY_GENERIC, 2)
-        end
-        return true
-    end
-    
-    -- Sonst: Gate-Punkt setzen
-    if CLIENT then
-        local pos = tr.HitPos
-        local preview = EGC_SHIP._toolPreview
-        
-        if #preview.currentGate >= 8 then
-            notification.AddLegacy("Max. Gate-Punkte erreicht!", NOTIFY_ERROR, 2)
-            return false
-        end
-        
-        table.insert(preview.currentGate, Vector(pos.x, pos.y, pos.z))
-        surface.PlaySound("buttons/button17.wav")
-        
-        -- An Server senden
-        net.Start("EGC_Shield_ToolPoint")
-        net.WriteString("gate")
-        net.WriteVector(pos)
-        net.SendToServer()
-    end
-    
     return true
 end
 
 -- ============================================================================
--- RELOAD: Punkte löschen
+-- RELOAD: Nur Rückgabewert (echte Logik im Client-Hook)
 -- ============================================================================
 function TOOL:Reload(tr)
     if not IsFirstTimePredicted() then return false end
-    
-    if CLIENT then
-        local preview = EGC_SHIP._toolPreview
-        
-        -- Zuerst aktuelle Gate-Punkte löschen
-        if #preview.currentGate > 0 then
-            preview.currentGate = {}
-            notification.AddLegacy("Gate-Punkte gelöscht", NOTIFY_CLEANUP, 2)
-        -- Dann Hull-Punkte
-        elseif #preview.hullPoints > 0 then
-            preview.hullPoints = {}
-            notification.AddLegacy("Hull-Punkte gelöscht", NOTIFY_CLEANUP, 2)
-        -- Dann alle Gates
-        elseif #preview.gatePoints > 0 then
-            preview.gatePoints = {}
-            notification.AddLegacy("Alle Gates gelöscht", NOTIFY_CLEANUP, 2)
-        end
-        
-        surface.PlaySound("buttons/button15.wav")
-        
-        net.Start("EGC_Shield_ToolClear")
-        net.SendToServer()
-    end
-    
     return true
 end
 
@@ -196,6 +73,121 @@ function TOOL:Think()
     if CLIENT then
         EGC_SHIP._toolPreview.lastTrace = LocalPlayer():GetEyeTrace()
     end
+end
+
+-- ============================================================================
+-- CLIENT: Klick-Verarbeitung (läuft immer auf dem Client, auch in Singleplayer)
+-- CreateMove läuft vor Think und ist der richtige Ort für input.WasMousePressed.
+-- ============================================================================
+if CLIENT then
+    local function IsToolActive(ply)
+        if not IsValid(ply) then return false end
+        local wep = ply:GetActiveWeapon()
+        if not IsValid(wep) or wep:GetClass() ~= "gmod_tool" then return false end
+        local cvar = GetConVar("gmod_toolmode")
+        return cvar and cvar:GetString() == "egc_shield_config"
+    end
+
+    hook.Add("CreateMove", "EGC_Shield_ToolInput", function()
+        local ply = LocalPlayer()
+        if not IsValid(ply) or not IsToolActive(ply) then return end
+
+        local preview = EGC_SHIP._toolPreview
+        if not preview then return end
+
+        local tr = ply:GetEyeTrace()
+        local ent = tr.Entity
+
+        -- Linksklick: Hull-Punkt oder Hull-Scan auf Generator
+        if input.WasMousePressed(MOUSE_LEFT) then
+            if IsValid(ent) and ent:GetClass() == "egc_shield_generator" then
+                if #preview.hullPoints < 3 then
+                    notification.AddLegacy("Mindestens 3 Hull-Punkte setzen!", NOTIFY_ERROR, 3)
+                    surface.PlaySound("buttons/button10.wav")
+                    return
+                end
+                local resolution = tonumber(GetConVar("egc_shield_config_scan_resolution"):GetString()) or 50
+                net.Start("EGC_Shield_ToolFinish")
+                net.WriteUInt(ent:EntIndex(), 16)
+                net.WriteString("hull")
+                net.WriteUInt(resolution, 16)
+                net.WriteUInt(#preview.hullPoints, 16)
+                for _, p in ipairs(preview.hullPoints) do
+                    net.WriteVector(p)
+                end
+                net.SendToServer()
+                preview.targetGenerator = ent:EntIndex()
+                surface.PlaySound("buttons/button9.wav")
+            else
+                local pos = tr.HitPos
+                if not preview.hullPoints then preview.hullPoints = {} end
+                table.insert(preview.hullPoints, Vector(pos.x, pos.y, pos.z))
+                surface.PlaySound("buttons/button15.wav")
+                notification.AddLegacy(string.format("Hull-Punkt %d gesetzt (min. 3)", #preview.hullPoints), NOTIFY_GENERIC, 2)
+                net.Start("EGC_Shield_ToolPoint")
+                net.WriteString("hull")
+                net.WriteVector(pos)
+                net.SendToServer()
+            end
+            return
+        end
+
+        -- Rechtsklick: Gate-Punkt oder Gate erstellen auf Generator
+        if input.WasMousePressed(MOUSE_RIGHT) then
+            if IsValid(ent) and ent:GetClass() == "egc_shield_generator" then
+                if #preview.currentGate < 3 then
+                    notification.AddLegacy("Mindestens 3 Gate-Punkte setzen!", NOTIFY_ERROR, 3)
+                    surface.PlaySound("buttons/button10.wav")
+                    return
+                end
+                net.Start("EGC_Shield_ToolFinish")
+                net.WriteUInt(ent:EntIndex(), 16)
+                net.WriteString("gate")
+                net.WriteUInt(0, 16)
+                net.WriteUInt(#preview.currentGate, 16)
+                for _, p in ipairs(preview.currentGate) do
+                    net.WriteVector(p)
+                end
+                net.SendToServer()
+                table.insert(preview.gatePoints, table.Copy(preview.currentGate))
+                preview.currentGate = {}
+                surface.PlaySound("buttons/button14.wav")
+                notification.AddLegacy("Gate erstellt!", NOTIFY_GENERIC, 2)
+            else
+                local pos = tr.HitPos
+                if not preview.currentGate then preview.currentGate = {} end
+                if #preview.currentGate >= 8 then
+                    notification.AddLegacy("Max. Gate-Punkte erreicht!", NOTIFY_ERROR, 2)
+                    return
+                end
+                table.insert(preview.currentGate, Vector(pos.x, pos.y, pos.z))
+                surface.PlaySound("buttons/button17.wav")
+                notification.AddLegacy(string.format("Gate-Punkt %d gesetzt", #preview.currentGate), NOTIFY_GENERIC, 2)
+                net.Start("EGC_Shield_ToolPoint")
+                net.WriteString("gate")
+                net.WriteVector(pos)
+                net.SendToServer()
+            end
+            return
+        end
+
+        -- Reload (R): Punkte löschen
+        if input.WasKeyPressed(KEY_R) then
+            if #preview.currentGate > 0 then
+                preview.currentGate = {}
+                notification.AddLegacy("Gate-Punkte gelöscht", NOTIFY_CLEANUP, 2)
+            elseif #preview.hullPoints > 0 then
+                preview.hullPoints = {}
+                notification.AddLegacy("Hull-Punkte gelöscht", NOTIFY_CLEANUP, 2)
+            elseif #preview.gatePoints > 0 then
+                preview.gatePoints = {}
+                notification.AddLegacy("Alle Gates gelöscht", NOTIFY_CLEANUP, 2)
+            end
+            surface.PlaySound("buttons/button15.wav")
+            net.Start("EGC_Shield_ToolClear")
+            net.SendToServer()
+        end
+    end)
 end
 
 -- ============================================================================
@@ -312,6 +304,9 @@ if CLIENT then
         
         local preview = EGC_SHIP._toolPreview
         if not preview then return end
+        local hullPoints = preview.hullPoints or {}
+        local currentGate = preview.currentGate or {}
+        local gatePoints = preview.gatePoints or {}
         
         local tr = preview.lastTrace or ply:GetEyeTrace()
         
@@ -326,16 +321,16 @@ if CLIENT then
             boxX + boxW * 0.5, boxY + 15, Color(60, 200, 255), TEXT_ALIGN_CENTER)
         
         -- Hull-Punkte
-        local hullCount = #(preview.hullPoints or {})
+        local hullCount = #hullPoints
         local hullColor = hullCount >= 3 and Color(100, 255, 100) or Color(255, 200, 100)
         draw.SimpleText(string.format("Hull-Punkte: %d (min. 3)", hullCount), "DermaDefault", 
             boxX + 20, boxY + 40, hullColor)
         
         -- Gate-Punkte
-        local gateCount = #(preview.currentGate or {})
-        local totalGates = #(preview.gatePoints or {})
+        local gateCount = #currentGate
+        local totalGates = #gatePoints
         local gateColor = Color(255, 180, 60)
-        draw.SimpleText(string.format("Gate-Punkte: %d | Fertige Gates: %d", gateCount, totalGates), "DermaDefault", 
+        draw.SimpleText(string.format("Gate-Punkte: %d | Fertige Gates: %d", gateCount, totalGates), "DermaDefault",  
             boxX + 20, boxY + 60, gateColor)
         
         -- Anvisiertes Objekt
@@ -380,7 +375,7 @@ function TOOL.BuildCPanel(panel)
     panel:AddControl("Slider", {
         Label = "Scan-Auflösung",
         Type = "Integer",
-        Min = 20,
+        Min = 10,
         Max = 200,
         Command = "egc_shield_config_scan_resolution",
     })

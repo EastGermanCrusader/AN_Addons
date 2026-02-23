@@ -14,7 +14,7 @@ local CFG = EGC_SHIP.Config or {}
 -- HILFSFUNKTIONEN
 -- ============================================================================
 
--- Vereinfacht Punktwolke
+-- Vereinfacht Punktwolke: behält Punkte, die die Form gut beschreiben (nicht nur jedes N-te)
 local function SimplifyPointCloud(points, maxPoints)
     if #points <= maxPoints then return points end
     
@@ -28,103 +28,101 @@ local function SimplifyPointCloud(points, maxPoints)
     return simplified
 end
 
+-- Entfernt Punkte, die zu nah am vorherigen liegen (reduziert Rauschen, erhält Umriss)
+local function MergeNearbyPoints(points, minDist)
+    minDist = minDist or 25
+    if #points < 3 then return points end
+    
+    local out = { points[1] }
+    for i = 2, #points do
+        local prev = out[#out]
+        local cur = points[i]
+        if prev:Distance(cur) >= minDist then
+            table.insert(out, cur)
+        end
+    end
+    
+    if #out >= 3 and out[#out]:Distance(out[1]) < minDist then
+        table.remove(out)  -- Letzten entfernen wenn er zu nah am ersten
+    end
+    
+    return #out >= 3 and out or points
+end
+
 -- ============================================================================
 -- AUTO-HULL-DETECTION
--- Scannt die Map-Geometrie basierend auf Orientierungspunkten
+-- Die Orientierungspunkte definieren die Form; das Mesh legt sich von außen
+-- auf die Map und die Punkte (Oberfläche wird per Trace abgetastet).
 -- ============================================================================
+
+-- Projiziert einen Punkt von außen auf die nächste feste Oberfläche (Map/Prop)
+local function ProjectPointOntoSurface(point, outwardDir, mask)
+    local start = point + outwardDir * 120   -- von außen starten
+    local endPos = point - outwardDir * 4000 -- nach innen durch Schiff/Map
+    local tr = util.TraceLine({
+        start = start,
+        endpos = endPos,
+        mask = mask,
+    })
+    if tr.Hit then
+        return tr.HitPos
+    end
+    return point
+end
 
 local function ScanHullFromPoints(orientationPoints, resolution)
     if #orientationPoints < 3 then return {} end
     
-    resolution = math.Clamp(resolution or 50, 20, 500)
+    resolution = math.Clamp(resolution or 50, 10, 500)
+    local mask = MASK_SOLID
     
-    -- Bounding-Box berechnen
-    local mins, maxs = EGC_SHIP.CalculateBoundingBox(orientationPoints)
-    local center = (mins + maxs) / 2
+    -- Zentrum der vom Spieler vorgegebenen Form
+    local center = Vector(0, 0, 0)
+    for _, p in ipairs(orientationPoints) do center = center + p end
+    center = center / #orientationPoints
     
-    -- Scan-Bereich erweitern
-    local scanHeight = CFG.ScanHeight or 500
-    mins.z = mins.z - scanHeight
-    maxs.z = maxs.z + scanHeight
-    
+    -- 1. Jeden Orientierungspunkt von außen auf die Oberfläche legen
+    --    → Das Mesh folgt der Form und liegt auf Map/Schiff
     local hullPoints = {}
-    local scanned = {}  -- Duplikate vermeiden
-    local mask = MASK_SOLID_BRUSHONLY
+    for _, p in ipairs(orientationPoints) do
+        local outDir = (p - center):GetNormalized()
+        local onSurface = ProjectPointOntoSurface(p, outDir, mask)
+        table.insert(hullPoints, onSurface)
+    end
     
-    -- Von allen 6 Seiten scannen
-    local directions = {
-        { axis = "x", dir = Vector(1, 0, 0),  start = mins.x - 100 },
-        { axis = "x", dir = Vector(-1, 0, 0), start = maxs.x + 100 },
-        { axis = "y", dir = Vector(0, 1, 0),  start = mins.y - 100 },
-        { axis = "y", dir = Vector(0, -1, 0), start = maxs.y + 100 },
-        { axis = "z", dir = Vector(0, 0, 1),  start = mins.z - 100 },
-        { axis = "z", dir = Vector(0, 0, -1), start = maxs.z + 100 },
-    }
-    
-    for _, scan in ipairs(directions) do
-        local ranges = {}
-        
-        if scan.axis == "x" then
-            ranges = {
-                { from = mins.y, to = maxs.y, var = "y" },
-                { from = mins.z, to = maxs.z, var = "z" },
-            }
-        elseif scan.axis == "y" then
-            ranges = {
-                { from = mins.x, to = maxs.x, var = "x" },
-                { from = mins.z, to = maxs.z, var = "z" },
-            }
-        else
-            ranges = {
-                { from = mins.x, to = maxs.x, var = "x" },
-                { from = mins.y, to = maxs.y, var = "y" },
-            }
-        end
-        
-        -- Grid durchgehen
-        for v1 = ranges[1].from, ranges[1].to, resolution do
-            for v2 = ranges[2].from, ranges[2].to, resolution do
-                local startPos = Vector(0, 0, 0)
-                
-                if scan.axis == "x" then
-                    startPos = Vector(scan.start, v1, v2)
-                elseif scan.axis == "y" then
-                    startPos = Vector(v1, scan.start, v2)
-                else
-                    startPos = Vector(v1, v2, scan.start)
-                end
-                
-                local endPos = startPos + scan.dir * 10000
-                
-                local tr = util.TraceLine({
-                    start = startPos,
-                    endpos = endPos,
-                    mask = mask,
-                })
-                
-                if tr.Hit then
-                    -- Jede Geometrie zählt (nicht nur HitWorld – funktioniert auch auf Displacements/Props)
-                    -- Duplikat-Check (runde auf 10er)
-                    local key = string.format("%.0f_%.0f_%.0f",
-                        math.Round(tr.HitPos.x / 10) * 10,
-                        math.Round(tr.HitPos.y / 10) * 10,
-                        math.Round(tr.HitPos.z / 10) * 10)
-                    
-                    if not scanned[key] then
-                        scanned[key] = true
-                        table.insert(hullPoints, tr.HitPos)
-                    end
-                end
+    -- 2. Optional: Kontur verdichten (Zwischenpunkte ebenfalls auf Oberfläche projizieren)
+    local segs = math.Clamp(math.floor(resolution / 25), 0, 8)  -- 0–8 Zwischenpunkte pro Kante
+    if segs > 0 then
+        local dense = {}
+        for i = 1, #hullPoints do
+            local a = hullPoints[i]
+            local b = hullPoints[(i % #hullPoints) + 1]
+            table.insert(dense, a)
+            for k = 1, segs do
+                local t = k / (segs + 1)
+                local mid = Vector(
+                    Lerp(t, a.x, b.x),
+                    Lerp(t, a.y, b.y),
+                    Lerp(t, a.z, b.z)
+                )
+                local outDir = (mid - center):GetNormalized()
+                table.insert(dense, ProjectPointOntoSurface(mid, outDir, mask))
             end
         end
+        hullPoints = dense
     end
     
-    -- Zu Convex Hull vereinfachen
-    if #hullPoints > (CFG.MaxHullPoints or 128) then
-        hullPoints = SimplifyPointCloud(hullPoints, CFG.MaxHullPoints or 128)
+    if #hullPoints < 3 then return {} end
+    
+    -- 3. Doppelte/zu nahe Punkte zusammenfassen, Reihenfolge bleibt (Form bleibt erkennbar)
+    hullPoints = MergeNearbyPoints(hullPoints, 15)
+    
+    local maxPts = CFG.MaxHullPoints or 256
+    if #hullPoints > maxPts then
+        hullPoints = SimplifyPointCloud(hullPoints, maxPts)
     end
     
-    print(string.format("[EGC Shield] Hull-Scan: %d Punkte gefunden", #hullPoints))
+    print(string.format("[EGC Shield] Hull-Mesh: %d Punkte (Form von außen auf Map gelegt)", #hullPoints))
     return hullPoints
 end
 
@@ -146,15 +144,8 @@ end)
 
 -- Finish: Hull-Scan oder Gate erstellen
 net.Receive("EGC_Shield_ToolFinish", function(len, ply)
-    if not IsValid(ply) then return end
-    if not ply:IsAdmin() then
-        net.Start("EGC_Shield_ScanResult")
-        net.WriteBool(false)
-        net.WriteUInt(0, 16)
-        net.Send(ply)
-        return
-    end
-
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+    
     local entIndex = net.ReadUInt(16)
     local mode = net.ReadString()  -- "hull" oder "gate"
     local resolution = net.ReadUInt(16)
@@ -191,12 +182,6 @@ net.Receive("EGC_Shield_ToolFinish", function(len, ply)
         -- Hull-Scan durchführen
         print("[EGC Shield] Starte Hull-Scan...")
         local hullMesh = ScanHullFromPoints(points, resolution)
-        
-        -- Fallback: Wenn Scan zu wenig Punkte liefert (z. B. flache Map), Polygon aus gesetzten Punkten nutzen
-        if #hullMesh < 3 then
-            hullMesh = table.Copy(points)
-            print("[EGC Shield] Scan lieferte " .. #hullMesh .. " Punkte – nutze Orientierungspunkte als Hull.")
-        end
         
         if #hullMesh < 3 then
             net.Start("EGC_Shield_ScanResult")
@@ -446,9 +431,9 @@ function EGC_SHIP.SaveAllGenerators()
     local folder = CFG.DataFolder or "egc_ship_shields"
     
     if not file.IsDir(folder, "DATA") then
-        file.CreateDir(folder, "DATA")
+        file.CreateDir(folder)
     end
-
+    
     file.Write(GetSaveFilename(), json)
     print("[EGC Shield] " .. #data.generators .. " Generatoren gespeichert")
 end
