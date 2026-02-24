@@ -56,6 +56,18 @@ function EGC_SHIP.CreateGateData()
     }
 end
 
+-- Erstellt eine Damage-Zone (Fläche): mind. 3 Knoten, optional Name/Gruppe/HP
+function EGC_SHIP.CreateDamageZoneData(vertices)
+    local zone = {
+        vertices = vertices or {},
+        name = "",
+        groupId = "",
+        shieldHP = 0,
+        hullHP = 0,
+    }
+    return zone
+end
+
 -- ============================================================================
 -- GEOMETRIE-HILFSFUNKTIONEN
 -- ============================================================================

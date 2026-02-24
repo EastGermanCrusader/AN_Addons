@@ -7,8 +7,10 @@ if not SERVER then return end
 
 EGC_SHIP = EGC_SHIP or {}
 EGC_SHIP.Generators = EGC_SHIP.Generators or {}
+EGC_SHIP.DamageZones = EGC_SHIP.DamageZones or {}
 
 local CFG = EGC_SHIP.Config or {}
+local MIN_ZONE_VERTICES = EGC_SHIP.MinZoneVertices or 3
 
 -- ============================================================================
 -- HILFSFUNKTIONEN
@@ -127,234 +129,8 @@ local function ScanHullFromPoints(orientationPoints, resolution)
 end
 
 -- ============================================================================
--- TOOL NETZWERK-EMPFANG
+-- SYNC-ANFRAGE
 -- ============================================================================
-
--- Einzelner Punkt (wird nur für Vorschau genutzt)
-net.Receive("EGC_Shield_ToolPoint", function(len, ply)
-    if not IsValid(ply) or not ply:IsAdmin() then return end
-    -- Punkte werden client-seitig verwaltet
-end)
-
--- Punkte löschen
-net.Receive("EGC_Shield_ToolClear", function(len, ply)
-    if not IsValid(ply) or not ply:IsAdmin() then return end
-    -- Client-seitig
-end)
-
--- Finish: Hull-Scan oder Gate erstellen
-net.Receive("EGC_Shield_ToolFinish", function(len, ply)
-    if not IsValid(ply) or not ply:IsAdmin() then return end
-    
-    local entIndex = net.ReadUInt(16)
-    local mode = net.ReadString()  -- "hull" oder "gate"
-    local resolution = net.ReadUInt(16)
-    local numPoints = net.ReadUInt(16)
-    
-    -- Generator finden
-    local generator = Entity(entIndex)
-    if not IsValid(generator) or generator:GetClass() ~= "egc_shield_generator" then
-        net.Start("EGC_Shield_ScanResult")
-        net.WriteBool(false)
-        net.WriteUInt(0, 16)
-        net.Send(ply)
-        return
-    end
-    
-    -- Punkte lesen
-    local points = {}
-    for i = 1, numPoints do
-        local p = net.ReadVector()
-        if EGC_SHIP.ValidateVector(p) then
-            table.insert(points, p)
-        end
-    end
-    
-    if #points < 3 then
-        net.Start("EGC_Shield_ScanResult")
-        net.WriteBool(false)
-        net.WriteUInt(0, 16)
-        net.Send(ply)
-        return
-    end
-
-    if mode == "poly" then
-        local numFaces = net.ReadUInt(16)
-        if numFaces == 0 then
-            net.Start("EGC_Shield_ScanResult")
-            net.WriteBool(false)
-            net.WriteUInt(0, 16)
-            net.Send(ply)
-            return
-        end
-        local faces = {}
-        for i = 1, numFaces do
-            local a = net.ReadUInt(16)
-            local b = net.ReadUInt(16)
-            local c = net.ReadUInt(16)
-            if a >= 1 and a <= #points and b >= 1 and b <= #points and c >= 1 and c <= #points then
-                table.insert(faces, { a, b, c })
-            end
-        end
-        if #faces == 0 then
-            net.Start("EGC_Shield_ScanResult")
-            net.WriteBool(false)
-            net.WriteUInt(0, 16)
-            net.Send(ply)
-            return
-        end
-        generator:CreatePolyShieldFromTriangles(points, faces)
-        net.Start("EGC_Shield_ScanResult")
-        net.WriteBool(true)
-        net.WriteUInt(#faces, 16)
-        net.Send(ply)
-        BroadcastGeneratorSync(generator)
-        return
-    end
-    
-    if mode == "hull" then
-        -- Hull-Scan durchführen
-        print("[EGC Shield] Starte Hull-Scan...")
-        local hullMesh = ScanHullFromPoints(points, resolution)
-        
-        if #hullMesh < 3 then
-            net.Start("EGC_Shield_ScanResult")
-            net.WriteBool(false)
-            net.WriteUInt(0, 16)
-            net.Send(ply)
-            return
-        end
-        
-        -- Am Generator speichern
-        generator:SetHullData(points, hullMesh)
-        
-        -- Erfolg an Client
-        net.Start("EGC_Shield_ScanResult")
-        net.WriteBool(true)
-        net.WriteUInt(#hullMesh, 16)
-        net.Send(ply)
-        
-        -- Full Sync an alle
-        BroadcastGeneratorSync(generator)
-        
-    elseif mode == "gate" then
-        -- Gate erstellen (Punkte direkt als Mesh)
-        local success = generator:AddGate(points, points)
-        
-        net.Start("EGC_Shield_ScanResult")
-        net.WriteBool(success)
-        net.WriteUInt(#points, 16)
-        net.Send(ply)
-        
-        if success then
-            BroadcastGeneratorSync(generator)
-        end
-    end
-end)
-
--- Schild aus Nodes bauen (grob/klobig) + Gates (4–8 Knoten pro Gate) anwenden
-net.Receive("EGC_Shield_BuildFromNodes", function(len, ply)
-    if not IsValid(ply) or not ply:IsAdmin() then return end
-
-    local entIndex = net.ReadUInt(16)
-    local generator = Entity(entIndex)
-    if not IsValid(generator) or generator:GetClass() ~= "egc_shield_generator" then
-        if IsValid(ply) then ply:ChatPrint("[EGC Shield] Ungültiger Generator.") end
-        return
-    end
-
-    local radius = (EGC_SHIP.Config and EGC_SHIP.Config.SectorNodeRadius) or 5000
-    local center = generator:GetPos()
-    local allEnts = ents.FindInSphere(center, radius)
-    local nodePositions = {}
-    for _, ent in ipairs(allEnts) do
-        if IsValid(ent) and ent:GetClass() == "egc_shield_node" then
-            table.insert(nodePositions, ent:GetPos())
-        end
-    end
-
-    if #nodePositions < 4 then
-        if IsValid(ply) then
-            ply:ChatPrint("[EGC Shield] Mindestens 4 Nodes im Radius " .. radius .. " nötig. Gefunden: " .. #nodePositions)
-        end
-        return
-    end
-
-    -- Schild grob/klobig aus allen Nodes (ein Convex um die Nodes)
-    generator:RemoveShieldSectors()
-    generator:CreateShieldSectorFromPoints(nodePositions)
-    generator:SetHullData(nodePositions, nodePositions, true)
-
-    -- Gates (4–8 Punkte pro Gate) anwenden – bestehende Gates ersetzen
-    local genData = generator:GetGeneratorData()
-    if genData then genData.gates = {} end
-    generator:ClearGates()
-
-    local numGates = net.ReadUInt(16)
-    for _ = 1, numGates do
-        local numPoints = net.ReadUInt(16)
-        if numPoints >= 4 and numPoints <= 8 then
-            local points = {}
-            for i = 1, numPoints do
-                local p = net.ReadVector()
-                if EGC_SHIP.ValidateVector(p) then table.insert(points, p) end
-            end
-            if #points >= 4 and #points <= 8 then
-                generator:AddGate(points, points)
-            end
-        end
-    end
-
-    BroadcastGeneratorSync(generator)
-    if IsValid(ply) then
-        ply:ChatPrint("[EGC Shield] Schild aus " .. #nodePositions .. " Nodes + " .. numGates .. " Gates erstellt.")
-    end
-end)
-
--- Schild-Node platzieren
-net.Receive("EGC_Shield_PlaceNode", function(len, ply)
-    if not IsValid(ply) or not ply:IsAdmin() then return end
-    local pos = net.ReadVector()
-    if not EGC_SHIP.ValidateVector(pos) then return end
-    local node = ents.Create("egc_shield_node")
-    if not IsValid(node) then return end
-    node:SetPos(pos)
-    node:Spawn()
-end)
-
--- Sektor aus Nodes erstellen (Hull-Wrapping: Nodes = Eckpunkte)
-net.Receive("EGC_Shield_CreateSectorFromNodes", function(len, ply)
-    if not IsValid(ply) or not ply:IsAdmin() then return end
-
-    local entIndex = net.ReadUInt(16)
-    local generator = Entity(entIndex)
-    if not IsValid(generator) or generator:GetClass() ~= "egc_shield_generator" then
-        if IsValid(ply) then ply:ChatPrint("[EGC Shield] Ungültiger Generator.") end
-        return
-    end
-
-    local radius = (EGC_SHIP.Config and EGC_SHIP.Config.SectorNodeRadius) or 5000
-    local center = generator:GetPos()
-    local nodes = ents.FindInSphere(center, radius)
-    local points = {}
-    for _, ent in ipairs(nodes) do
-        if IsValid(ent) and ent:GetClass() == "egc_shield_node" then
-            table.insert(points, ent:GetPos())
-        end
-    end
-
-    if #points < 4 then
-        if IsValid(ply) then
-            ply:ChatPrint("[EGC Shield] Mindestens 4 Schild-Nodes im Radius " .. radius .. " nötig. Gefunden: " .. #points)
-        end
-        return
-    end
-
-    generator:CreateShieldSectorFromPoints(points)
-    if IsValid(ply) then
-        ply:ChatPrint("[EGC Shield] Sektor aus " .. #points .. " Nodes erstellt.")
-    end
-end)
 
 -- Sync-Anfrage
 net.Receive("EGC_Shield_RequestSync", function(len, ply)
@@ -367,6 +143,88 @@ net.Receive("EGC_Shield_RequestSync", function(len, ply)
             SendGeneratorSync(ent, ply)
         end
     end
+    -- Damage-Zonen mitsenden
+    SendDamageZonesSync(ply)
+end)
+
+-- ============================================================================
+-- DAMAGE-ZONEN (Flächen)
+-- ============================================================================
+
+net.Receive("EGC_DamageZone_Finish", function(len, ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+
+    local numVerts = net.ReadUInt(16)
+    if numVerts < MIN_ZONE_VERTICES then return end
+
+    local vertices = {}
+    for i = 1, numVerts do
+        local p = net.ReadVector()
+        if EGC_SHIP.ValidateVector(p) then
+            table.insert(vertices, p)
+        end
+    end
+
+    if #vertices < MIN_ZONE_VERTICES then return end
+
+    local zone = EGC_SHIP.CreateDamageZoneData(vertices)
+    zone.name = "Zone " .. (#EGC_SHIP.DamageZones + 1)
+    table.insert(EGC_SHIP.DamageZones, zone)
+
+    BroadcastDamageZonesSync()
+end)
+
+function SendDamageZonesSync(target)
+    net.Start("EGC_DamageZones_FullSync")
+    local zones = EGC_SHIP.DamageZones or {}
+    net.WriteUInt(#zones, 16)
+    for _, zone in ipairs(zones) do
+        net.WriteString(zone.name or "")
+        net.WriteString(zone.groupId or "")
+        net.WriteFloat(zone.shieldHP or 0)
+        net.WriteFloat(zone.hullHP or 0)
+        local verts = zone.vertices or {}
+        net.WriteUInt(#verts, 16)
+        for _, p in ipairs(verts) do
+            net.WriteVector(p)
+        end
+    end
+    if target then
+        net.Send(target)
+    else
+        net.Broadcast()
+    end
+end
+
+function BroadcastDamageZonesSync()
+    SendDamageZonesSync(nil)
+end
+
+net.Receive("EGC_DamageZones_RequestSync", function(len, ply)
+    if not IsValid(ply) then return end
+    SendDamageZonesSync(ply)
+end)
+
+-- Zone-Konfig: Name, Gruppe, Schild-HP, Hüllen-HP (Index 1-based)
+net.Receive("EGC_ZoneConfig_Update", function(len, ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+
+    local zoneIndex = net.ReadUInt(16)
+    local name = net.ReadString()
+    local groupId = net.ReadString()
+    local shieldHP = net.ReadFloat()
+    local hullHP = net.ReadFloat()
+
+    local zones = EGC_SHIP.DamageZones or {}
+    if zoneIndex < 1 or zoneIndex > #zones then return end
+
+    local zone = zones[zoneIndex]
+    zone.name = name or ""
+    zone.groupId = groupId or ""
+    zone.shieldHP = math.Clamp(shieldHP, 0, 100000)
+    zone.hullHP = math.Clamp(hullHP, 0, 100000)
+
+    BroadcastDamageZonesSync()
 end)
 
 -- ============================================================================

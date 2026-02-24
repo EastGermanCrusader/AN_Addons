@@ -109,18 +109,23 @@ EGC_SHIP.SectorTypes = {
     "engine",           -- Antrieb
 }
 
+-- ===================
+-- DAMAGE-ZONEN (Flächen)
+-- ===================
+EGC_SHIP.MinZoneVertices = 3   -- Mindest-Knoten pro Fläche
+EGC_SHIP.DamageZones = EGC_SHIP.DamageZones or {}  -- Wird auf Server geführt, an Clients gesynct
+
 -- Netzwerk-Strings
 if SERVER then
     util.AddNetworkString("EGC_Shield_FullSync")
     util.AddNetworkString("EGC_Shield_Update")
     util.AddNetworkString("EGC_Shield_Hit")
-    util.AddNetworkString("EGC_Shield_ToolPoint")
-    util.AddNetworkString("EGC_Shield_ToolFinish")
-    util.AddNetworkString("EGC_Shield_ToolClear")
     util.AddNetworkString("EGC_Shield_ScanResult")
     util.AddNetworkString("EGC_Shield_RequestSync")
-    util.AddNetworkString("EGC_Shield_CreateSectorFromNodes")
-    util.AddNetworkString("EGC_Shield_PlaceNode")
     util.AddNetworkString("EGC_Shield_SectorMesh")
-    util.AddNetworkString("EGC_Shield_BuildFromNodes")
+    -- Damage-Zonen (Flächen)
+    util.AddNetworkString("EGC_DamageZone_Finish")
+    util.AddNetworkString("EGC_DamageZones_FullSync")
+    util.AddNetworkString("EGC_DamageZones_RequestSync")
+    util.AddNetworkString("EGC_ZoneConfig_Update")  -- Zone umbenennen, Gruppe, Schild/Hüllen-HP
 end

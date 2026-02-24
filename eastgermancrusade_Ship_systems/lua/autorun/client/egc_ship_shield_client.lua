@@ -7,7 +7,36 @@ if not CLIENT then return end
 
 EGC_SHIP = EGC_SHIP or {}
 EGC_SHIP.Generators = EGC_SHIP.Generators or {}
+EGC_SHIP.DamageZones = EGC_SHIP.DamageZones or {}
 EGC_SHIP._sectorMeshes = EGC_SHIP._sectorMeshes or {}  -- [entIndex] = { {v1,v2,v3}, ... }
+
+net.Receive("EGC_DamageZones_FullSync", function()
+    local zones = {}
+    local count = net.ReadUInt(16)
+    for i = 1, count do
+        local name = net.ReadString()
+        local groupId = net.ReadString()
+        local shieldHP = net.ReadFloat()
+        local hullHP = net.ReadFloat()
+        local numVerts = net.ReadUInt(16)
+        local vertices = {}
+        for j = 1, numVerts do
+            table.insert(vertices, net.ReadVector())
+        end
+        table.insert(zones, {
+            name = name,
+            groupId = groupId,
+            shieldHP = shieldHP,
+            hullHP = hullHP,
+            vertices = vertices,
+        })
+    end
+    EGC_SHIP.DamageZones = zones
+    -- Zone-Konfig-Panel aktualisieren, falls offen (damit Zonen sichtbar sind)
+    if EGC_SHIP.RefreshZoneConfigPanel then
+        EGC_SHIP.RefreshZoneConfigPanel()
+    end
+end)
 
 net.Receive("EGC_Shield_SectorMesh", function()
     local entIndex = net.ReadUInt(16)
@@ -29,9 +58,11 @@ end)
 hook.Add("InitPostEntity", "EGC_Shield_ClientInit", function()
     print("[EGC Ship Shield System] Client initialisiert")
     
-    -- Sync anfordern
+    -- Sync anfordern (Generatoren + Damage-Zonen)
     timer.Simple(1, function()
         net.Start("EGC_Shield_RequestSync")
+        net.SendToServer()
+        net.Start("EGC_DamageZones_RequestSync")
         net.SendToServer()
     end)
 end)
