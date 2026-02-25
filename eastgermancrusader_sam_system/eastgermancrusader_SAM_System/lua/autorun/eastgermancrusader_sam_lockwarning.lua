@@ -13,20 +13,13 @@ if SERVER then
     -- Netzwerk-Strings registrieren
     util.AddNetworkString("EGC_SAM_LockWarning")
     util.AddNetworkString("EGC_SAM_MissileIncoming")
-    
-    -- Lock Warning an Fahrzeug senden
-    function EGC_SAM_SendLockWarning(vehicle, isLocked, lockingEntity)
-        if not IsValid(vehicle) then return end
-        
-        -- Finde alle Spieler im Fahrzeug
+
+    -- Gibt alle Spieler im Fahrzeug zurück (Fahrer + Passagiere) – eine Stelle, keine Redundanz
+    local function EGC_SAM_GetPlayersInVehicle(vehicle)
         local players = {}
-        
-        -- Fahrer
         if vehicle.GetDriver and IsValid(vehicle:GetDriver()) then
             table.insert(players, vehicle:GetDriver())
         end
-        
-        -- Passagiere
         if vehicle.pPASSENGER then
             for _, seat in pairs(vehicle.pPASSENGER) do
                 if IsValid(seat) and IsValid(seat:GetDriver()) then
@@ -34,8 +27,13 @@ if SERVER then
                 end
             end
         end
-        
-        -- Nachricht senden
+        return players
+    end
+    
+    -- Lock Warning an Fahrzeug senden
+    function EGC_SAM_SendLockWarning(vehicle, isLocked, lockingEntity)
+        if not IsValid(vehicle) then return end
+        local players = EGC_SAM_GetPlayersInVehicle(vehicle)
         for _, ply in pairs(players) do
             net.Start("EGC_SAM_LockWarning")
             net.WriteBool(isLocked)
@@ -47,21 +45,7 @@ if SERVER then
     -- Missile Incoming Warning
     function EGC_SAM_SendMissileWarning(vehicle, missile)
         if not IsValid(vehicle) then return end
-        
-        local players = {}
-        
-        if vehicle.GetDriver and IsValid(vehicle:GetDriver()) then
-            table.insert(players, vehicle:GetDriver())
-        end
-        
-        if vehicle.pPASSENGER then
-            for _, seat in pairs(vehicle.pPASSENGER) do
-                if IsValid(seat) and IsValid(seat:GetDriver()) then
-                    table.insert(players, seat:GetDriver())
-                end
-            end
-        end
-        
+        local players = EGC_SAM_GetPlayersInVehicle(vehicle)
         for _, ply in pairs(players) do
             net.Start("EGC_SAM_MissileIncoming")
             net.WriteEntity(missile or NULL)
