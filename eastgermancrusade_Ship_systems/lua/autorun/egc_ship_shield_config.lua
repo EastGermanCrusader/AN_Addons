@@ -52,6 +52,13 @@ EGC_SHIP.Config = {
     BulletDamageToShield = 0.5,         -- Multiplikator: Bullet-Damage → Schild-%
     ExplosionDamageToShield = 2.0,      -- Multiplikator: Explosion → Schild-%
     ShieldDownDuration = 10,            -- Sekunden bis Schild nach Kollaps wieder hochfährt
+    -- Zonen: realistisches Schadensverhalten – alles wirkt, aber unterschiedlich stark (Schüsse wenig → Explosionen mehr → Nuke am meisten)
+    ZoneBulletDamageMin = 2,            -- Mindest-Rohschaden pro Kugel (falls Weapon 0 liefert), wird mit Multiplikator verrechnet
+    ZoneBulletDamageMultiplier = 0.08, -- Kugeln: sehr wenig Schaden (z. B. AR2 10 → ~0.8, Min 2 → ~0.16)
+    ZoneExplosionDamageMin = 5,         -- Kleine Explosions-Ticks (Gbomb-Shockwave 1–20) mind. so viel
+    ZoneExplosionDamageMultiplier = 1,  -- Basis-Multiplikator für Explosionen
+    ZoneExplosionScaleByAmount = true,  -- true = größere Explosionen schaden dem Schild proportional mehr (RPG < Nuke)
+    ZoneExplosionScaleRef = 300,        -- Referenzwert: Schaden 300 ≈ Faktor 1, darunter weniger, darüber mehr
     
     -- ===================
     -- GATES (Durchlass-Zonen)
@@ -95,6 +102,43 @@ EGC_SHIP.Config = {
     CollisionCheckInterval = 0.1,       -- Sekunden zwischen Kollisions-Checks
     RegenTickInterval = 0.5,            -- Sekunden zwischen Regen-Ticks
     BroadcastInterval = 0.25,           -- Sekunden zwischen Client-Updates
+    ZoneExplosionRadius = 450,           -- Radius für Explosionen: Zonen in dieser Reichweite werden getroffen (DMG_BLAST)
+    ZoneDamageToleranceRadius = 80,     -- Für alle Schadenstypen: Zonen in dieser Reichweite um Trefferpunkt gelten als getroffen (Area/Nahbereich)
+    -- Projektile: Klassen, die als fliegende Geschosse abgefangen werden (durch Zonen). Wert = Schaden bei Treffer.
+    -- HL2 RPG (rpg_rocket/rpg_missile) NICHT in der Liste: Rakete soll am Ziel aufschlagen und dort explodieren;
+    -- der Explosionsschaden wird über EntityTakeDamage (DMG_BLAST + ZoneExplosionRadius) an die Zonen angewendet.
+    ProjectileClasses = {
+        -- HL2 (ohne RPG – siehe Kommentar oben)
+        ["crossbow_bolt"] = 75,
+        ["grenade_ar2"] = 80,
+        ["npc_grenade_frag"] = 100,
+        ["ar2_combine_ball"] = 20,
+        -- LVS (Lenny's Vehicle System)
+        ["lvs_sam_torpedo"] = 200,
+        -- Gbomb (g&h_bombs)
+        ["gb5_proj_howitzer_shell_frag"] = 120,
+        ["gb5_proj_howitzer_shell_he"] = 150,
+        ["gb5_proj_howitzer_shell_in"] = 100,
+        ["gb5_proj_howitzer_shell_cl"] = 80,
+        ["gb5_proj_icbm"] = 300,
+        ["gb5_light_peldumb"] = 90,
+        ["gb5_m_clustermine_blet_ad"] = 60,
+        ["gb5_m_clustermine_bomblet"] = 70,
+        ["gb5_heavy_cbu_bomblet"] = 65,
+        ["gb5_light_schrapnel_bomb"] = 50,
+        -- Hbomb (g&h_bombs)
+        ["hb_proj_v2_small"] = 180,
+        ["hb_main_clusterbomblet"] = 70,
+        ["hb_main_bigjdam"] = 100,
+        ["hb_misc_grenade"] = 80,
+        -- ArcCW (Projektil-Waffen; viele ArcCW-Waffen nutzen EntityFireBullets = werden bereits abgefangen)
+        ["arccw_apex_ball"] = 25,
+        ["arccw_proj_he"] = 90,
+        ["arccw_proj_he_ubgl"] = 90,
+        ["arccw_proj_slug"] = 40,
+        ["arccw_frag"] = 85,
+    },
+    ProjectileCheckInterval = 0.04,      -- Sekunden zwischen Projektil-Checks (25 Hz)
 }
 
 -- Sektor-Typen für Organisation
@@ -128,4 +172,7 @@ if SERVER then
     util.AddNetworkString("EGC_DamageZones_FullSync")
     util.AddNetworkString("EGC_DamageZones_RequestSync")
     util.AddNetworkString("EGC_ZoneConfig_Update")  -- Zone umbenennen, Gruppe, Schild/Hüllen-HP
+    util.AddNetworkString("EGC_ZoneShieldHit")      -- Treffer auf Zone mit Schild-HP (Ring-Effekt)
+    util.AddNetworkString("EGC_ZoneShieldDepleted")  -- Schild-HP der Zone auf 0 → Zone leuchtet kurz weiß
+    util.AddNetworkString("EGC_ZoneHPUpdate")        -- Sofortige HP-Aktualisierung einer Zone (Schild/Hülle)
 end

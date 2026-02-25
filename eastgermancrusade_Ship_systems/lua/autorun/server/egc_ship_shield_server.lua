@@ -147,6 +147,42 @@ net.Receive("EGC_Shield_RequestSync", function(len, ply)
     SendDamageZonesSync(ply)
 end)
 
+EGC_SHIP.DamageZones = EGC_SHIP.DamageZones or {}
+EGC_SHIP.ZoneGroupHP = EGC_SHIP.ZoneGroupHP or {}  -- [groupKey] = { shieldHP, hullHP } – gemeinsamer HP-Pool pro Zonengruppe
+
+-- Gruppen-Key: gleiche groupId = gleicher Pool; leere groupId = Zone hat eigenen Pool (z1, z2, …)
+local function GetGroupKey(zone, zoneIndex)
+    local g = zone and zone.groupId
+    if g and g ~= "" then return g end
+    return "z" .. tostring(zoneIndex)
+end
+
+-- Gibt den HP-Pool für die Gruppe dieser Zone zurück (erstellt ihn aus Zone, falls nötig).
+function EGC_SHIP.GetZoneGroupPool(zone, zoneIndex)
+    local zones = EGC_SHIP.DamageZones or {}
+    if not zone or zoneIndex < 1 or zoneIndex > #zones then return nil end
+    local key = GetGroupKey(zone, zoneIndex)
+    if not EGC_SHIP.ZoneGroupHP[key] then
+        EGC_SHIP.ZoneGroupHP[key] = {
+            shieldHP = math.max(0, tonumber(zone.shieldHP) or 0),
+            hullHP = math.max(0, tonumber(zone.hullHP) or 0),
+        }
+    end
+    return EGC_SHIP.ZoneGroupHP[key]
+end
+
+-- Alle Zonen-Indizes, die dieselbe Gruppe wie zoneIndex haben (gleicher HP-Pool).
+function EGC_SHIP.GetZoneIndicesInGroup(zoneIndex)
+    local zones = EGC_SHIP.DamageZones or {}
+    if zoneIndex < 1 or zoneIndex > #zones then return {} end
+    local key = GetGroupKey(zones[zoneIndex], zoneIndex)
+    local out = {}
+    for i, z in ipairs(zones) do
+        if GetGroupKey(z, i) == key then table.insert(out, i) end
+    end
+    return out
+end
+
 -- ============================================================================
 -- DAMAGE-ZONEN (Flächen)
 -- ============================================================================
@@ -178,11 +214,12 @@ function SendDamageZonesSync(target)
     net.Start("EGC_DamageZones_FullSync")
     local zones = EGC_SHIP.DamageZones or {}
     net.WriteUInt(#zones, 16)
-    for _, zone in ipairs(zones) do
+    for i, zone in ipairs(zones) do
         net.WriteString(zone.name or "")
         net.WriteString(zone.groupId or "")
-        net.WriteFloat(zone.shieldHP or 0)
-        net.WriteFloat(zone.hullHP or 0)
+        local pool = EGC_SHIP.GetZoneGroupPool(zone, i)
+        net.WriteFloat(pool and pool.shieldHP or 0)
+        net.WriteFloat(pool and pool.hullHP or 0)
         local verts = zone.vertices or {}
         net.WriteUInt(#verts, 16)
         for _, p in ipairs(verts) do
@@ -198,6 +235,47 @@ end
 
 function BroadcastDamageZonesSync()
     SendDamageZonesSync(nil)
+    -- Barrieren-Update verzögern: nicht in Physik-/Schadens-Callback (Cannot destroy physics in a physics callback)
+    timer.Simple(0, function() EGC_SHIP.UpdateZoneBarriers() end)
+end
+
+-- Physische Barrieren: Nur Zonen mit Schild-HP der Gruppe > 0 haben Kollision.
+function EGC_SHIP.UpdateZoneBarriers()
+    EGC_SHIP._zoneBarriers = EGC_SHIP._zoneBarriers or {}
+    local zones = EGC_SHIP.DamageZones or {}
+    local barriers = EGC_SHIP._zoneBarriers
+
+    for i = 1, #zones do
+        local zone = zones[i]
+        local verts = zone.vertices
+        local pool = EGC_SHIP.GetZoneGroupPool(zone, i)
+        local shieldHP = pool and math.max(0, pool.shieldHP) or 0
+
+        if shieldHP > 0 and verts and #verts >= 3 then
+            if barriers[i] and IsValid(barriers[i]) then
+                barriers[i]:SetZoneVertices(verts)
+            else
+                local ent = ents.Create("egc_zone_barrier")
+                if IsValid(ent) then
+                    ent:Spawn()
+                    ent:SetZoneVertices(verts)
+                    barriers[i] = ent
+                end
+            end
+        else
+            if barriers[i] and IsValid(barriers[i]) then
+                barriers[i]:Remove()
+                barriers[i] = nil
+            end
+        end
+    end
+
+    for i = #zones + 1, 256 do
+        if barriers[i] and IsValid(barriers[i]) then
+            barriers[i]:Remove()
+            barriers[i] = nil
+        end
+    end
 end
 
 net.Receive("EGC_DamageZones_RequestSync", function(len, ply)
@@ -221,8 +299,13 @@ net.Receive("EGC_ZoneConfig_Update", function(len, ply)
     local zone = zones[zoneIndex]
     zone.name = name or ""
     zone.groupId = groupId or ""
-    zone.shieldHP = math.Clamp(shieldHP, 0, 100000)
-    zone.hullHP = math.Clamp(hullHP, 0, 100000)
+    -- Gruppen-Pool setzen (HP gilt für die gesamte Zonengruppe)
+    local key = (groupId and groupId ~= "") and groupId or ("z" .. tostring(zoneIndex))
+    EGC_SHIP.ZoneGroupHP = EGC_SHIP.ZoneGroupHP or {}
+    EGC_SHIP.ZoneGroupHP[key] = {
+        shieldHP = math.Clamp(shieldHP, 0, 100000),
+        hullHP = math.Clamp(hullHP, 0, 100000),
+    }
 
     BroadcastDamageZonesSync()
 end)
@@ -270,46 +353,327 @@ function BroadcastGeneratorSync(generator)
 end
 
 -- ============================================================================
--- GESCHOSS-BLOCKIERUNG
+-- DAMAGE-ZONEN: Treffer ermitteln (Ray gegen Polygon)
 -- ============================================================================
 
-hook.Add("EntityFireBullets", "EGC_Shield_BlockBullets", function(ent, bulletData)
-    if not bulletData or not bulletData.Src or not bulletData.Dir then return end
-    
-    local hit = EGC_SHIP.FindShieldHit(bulletData.Src, bulletData.Dir:GetNormalized(), 50000)
-    
-    if hit then
-        local generator = Entity(hit.entIndex)
-        if IsValid(generator) and generator.ApplyShieldDamage then
-            local damage = bulletData.Damage or 10
-            generator:ApplyShieldDamage(damage, DMG_BULLET)
-            
-            -- Effekt am Trefferpunkt
-            local effectData = EffectData()
-            effectData:SetOrigin(hit.hitPos)
-            effectData:SetNormal((bulletData.Src - hit.hitPos):GetNormalized())
-            effectData:SetScale(0.5)
-            util.Effect("AR2Impact", effectData)
+-- Findet die nächste getroffene Damage-Zone entlang des Strahls
+function EGC_SHIP.FindZoneHit(origin, dir, maxDist)
+    maxDist = maxDist or 50000
+    local zones = EGC_SHIP.DamageZones or {}
+    local bestT, bestIdx, bestPos = nil, nil, nil
+    for i, zone in ipairs(zones) do
+        local verts = zone.vertices
+        if verts and #verts >= 3 then
+            local t = EGC_SHIP.RayPolygonIntersect(origin, dir, verts)
+            if t and t > 0.05 and t <= maxDist and (not bestT or t < bestT) then
+                bestT = t
+                bestIdx = i
+                bestPos = origin + dir * t
+            end
         end
-        
-        return true  -- Geschoss blockieren
+    end
+    if bestIdx then
+        return { zoneIndex = bestIdx, hitPos = bestPos, distance = bestT }
+    end
+    return nil
+end
+
+-- Wendet Schaden auf die Gruppe der Zone an (gemeinsamer HP-Pool). Gibt true zurück, wenn Schild getroffen wurde.
+function EGC_SHIP.ApplyZoneDamage(zoneIndex, damage)
+    local zones = EGC_SHIP.DamageZones or {}
+    if zoneIndex < 1 or zoneIndex > #zones then return false end
+    local zone = zones[zoneIndex]
+    local pool = EGC_SHIP.GetZoneGroupPool(zone, zoneIndex)
+    if not pool then return false end
+    local shieldHP = math.max(0, pool.shieldHP)
+    local hullHP = math.max(0, pool.hullHP)
+    local hadShield = shieldHP > 0
+    local takeFromShield = math.min(shieldHP, damage)
+    pool.shieldHP = math.max(0, shieldHP - takeFromShield)
+    local remainder = damage - takeFromShield
+    pool.hullHP = math.max(0, hullHP - remainder)
+    -- HP-Update für alle Zonen dieser Gruppe an Clients senden
+    for _, idx in ipairs(EGC_SHIP.GetZoneIndicesInGroup(zoneIndex)) do
+        net.Start("EGC_ZoneHPUpdate")
+        net.WriteUInt(idx, 16)
+        net.WriteFloat(pool.shieldHP)
+        net.WriteFloat(pool.hullHP)
+        net.Broadcast()
+    end
+    return hadShield
+end
+
+-- Gibt Zonen-Indizes zurück, deren Mittelpunkt oder ein Vertex im Radius um pos liegt (für Explosionen/Raketen)
+function EGC_SHIP.FindZonesInRadius(pos, radius)
+    local zones = EGC_SHIP.DamageZones or {}
+    local out = {}
+    local r2 = radius * radius
+    for i, zone in ipairs(zones) do
+        local verts = zone.vertices
+        if not verts or #verts < 3 then continue end
+        local center = Vector(0, 0, 0)
+        for _, v in ipairs(verts) do center = center + v end
+        center = center / #verts
+        if center:DistToSqr(pos) <= r2 then
+            table.insert(out, i)
+        else
+            for _, v in ipairs(verts) do
+                if v:DistToSqr(pos) <= r2 then
+                    table.insert(out, i)
+                    break
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- ============================================================================
+-- PROJEKTIL-ENTITIES ABFANGEN (Raketen, Pfeile, Combine-Bälle etc.)
+-- ============================================================================
+
+EGC_SHIP._projLastPos = EGC_SHIP._projLastPos or {}
+local projCheckInterval = (EGC_SHIP.Config and EGC_SHIP.Config.ProjectileCheckInterval) or 0.04
+
+timer.Create("EGC_Zone_ProjectileCheck", projCheckInterval, 0, function()
+    local projClasses = (EGC_SHIP.Config and EGC_SHIP.Config.ProjectileClasses) or {}
+    local zones = EGC_SHIP.DamageZones or {}
+    if #zones == 0 then return end
+    local lastPos = EGC_SHIP._projLastPos
+
+    for _, ent in ipairs(ents.GetAll()) do
+        if not IsValid(ent) then continue end
+        local class = ent:GetClass()
+        local dmg = projClasses[class]
+        if not dmg or dmg <= 0 then continue end
+
+        local pos = ent:GetPos()
+        local idx = ent:EntIndex()
+        local prev = lastPos[idx]
+        local zoneHit = nil
+
+        if prev and prev:Distance(pos) > 2 then
+            local dir = (pos - prev):GetNormalized()
+            local maxDist = pos:Distance(prev)
+            for i, zone in ipairs(zones) do
+                local verts = zone.vertices
+                if verts and #verts >= 3 then
+                    local t = EGC_SHIP.RayPolygonIntersect(prev, dir, verts)
+                    if t and t > 0.02 and t < maxDist then
+                        if not zoneHit or t < zoneHit.t then
+                            zoneHit = { zoneIndex = i, hitPos = prev + dir * t, t = t }
+                        end
+                    end
+                end
+            end
+        else
+            for i, zone in ipairs(zones) do
+                local verts = zone.vertices
+                if verts and #verts >= 3 and EGC_SHIP.PointInPolygon3D(verts, pos) then
+                    zoneHit = { zoneIndex = i, hitPos = pos }
+                    break
+                end
+            end
+        end
+
+        lastPos[idx] = pos
+
+        if zoneHit then
+            local hadShield = EGC_SHIP.ApplyZoneDamage(zoneHit.zoneIndex, dmg)
+            local zone = EGC_SHIP.DamageZones[zoneHit.zoneIndex]
+            if hadShield then
+                local hitNormal = (zone and zone.vertices and #zone.vertices >= 3) and EGC_SHIP.PolygonNormal(zone.vertices) or Vector(0, 0, 1)
+                if hitNormal:LengthSqr() < 0.01 then hitNormal = Vector(0, 0, 1) end
+                hitNormal = hitNormal:GetNormalized()
+                net.Start("EGC_ZoneShieldHit")
+                net.WriteUInt(zoneHit.zoneIndex, 16)
+                net.WriteVector(zoneHit.hitPos)
+                net.WriteVector(hitNormal)
+                net.Broadcast()
+            end
+            local pool = zone and EGC_SHIP.GetZoneGroupPool(zone, zoneHit.zoneIndex)
+            if pool and pool.shieldHP <= 0 and hadShield then
+                for _, idx in ipairs(EGC_SHIP.GetZoneIndicesInGroup(zoneHit.zoneIndex)) do
+                    net.Start("EGC_ZoneShieldDepleted")
+                    net.WriteUInt(idx, 16)
+                    net.Broadcast()
+                end
+            end
+            BroadcastDamageZonesSync()
+            ent:Remove()
+            lastPos[idx] = nil
+            local ed = EffectData()
+            ed:SetOrigin(zoneHit.hitPos)
+            ed:SetScale(1)
+            util.Effect("Explosion", ed)
+        end
+    end
+
+    for idx, _ in pairs(lastPos) do
+        if not IsValid(Entity(idx)) then lastPos[idx] = nil end
     end
 end)
 
 -- ============================================================================
--- EXPLOSIONS-SCHADEN
+-- GESCHOSS-BLOCKIERUNG (Schild-Generator + Damage-Zonen)
+-- ============================================================================
+
+hook.Add("EntityFireBullets", "EGC_Shield_BlockBullets", function(ent, bulletData)
+    if not bulletData or not bulletData.Src or not bulletData.Dir then return end
+
+    local dir = bulletData.Dir:GetNormalized()
+    local zoneHit = EGC_SHIP.FindZoneHit(bulletData.Src, dir, 50000)
+    local shieldHit = EGC_SHIP.FindShieldHit(bulletData.Src, dir, 50000)
+
+    -- Nächsten Treffer verwenden: zuerst Zone, dann globaler Schild
+    if zoneHit and (not shieldHit or zoneHit.distance < shieldHit.distance) then
+        local cfg = EGC_SHIP.Config or {}
+        local rawDmg = bulletData.Damage or 0
+        local damage = math.max(rawDmg, cfg.ZoneBulletDamageMin or 10) * (cfg.ZoneBulletDamageMultiplier or 1)
+        local hadShield = EGC_SHIP.ApplyZoneDamage(zoneHit.zoneIndex, damage)
+        if hadShield then
+            local zone = EGC_SHIP.DamageZones[zoneHit.zoneIndex]
+            local hitNormal = (zone and zone.vertices and #zone.vertices >= 3) and EGC_SHIP.PolygonNormal(zone.vertices) or Vector(0, 0, 1)
+            if hitNormal:LengthSqr() < 0.01 then hitNormal = Vector(0, 0, 1) end
+            hitNormal = hitNormal:GetNormalized()
+            net.Start("EGC_ZoneShieldHit")
+            net.WriteUInt(zoneHit.zoneIndex, 16)
+            net.WriteVector(zoneHit.hitPos)
+            net.WriteVector(hitNormal)
+            net.Broadcast()
+        end
+        local zone = EGC_SHIP.DamageZones[zoneHit.zoneIndex]
+        if zone and hadShield then
+            local pool = EGC_SHIP.GetZoneGroupPool(zone, zoneHit.zoneIndex)
+            if pool and pool.shieldHP <= 0 then
+                for _, idx in ipairs(EGC_SHIP.GetZoneIndicesInGroup(zoneHit.zoneIndex)) do
+                    net.Start("EGC_ZoneShieldDepleted")
+                    net.WriteUInt(idx, 16)
+                    net.Broadcast()
+                end
+            end
+        end
+        BroadcastDamageZonesSync()
+        local effectData = EffectData()
+        effectData:SetOrigin(zoneHit.hitPos)
+        effectData:SetNormal((bulletData.Src - zoneHit.hitPos):GetNormalized())
+        effectData:SetScale(0.4)
+        util.Effect("AR2Impact", effectData)
+        return true
+    end
+
+    if shieldHit then
+        local generator = Entity(shieldHit.entIndex)
+        if IsValid(generator) and generator.ApplyShieldDamage then
+            local cfg = EGC_SHIP.Config or {}
+            local rawDmg = bulletData.Damage or 0
+            local damage = math.max(rawDmg, cfg.ZoneBulletDamageMin or 10) * (cfg.ZoneBulletDamageMultiplier or 1)
+            generator:ApplyShieldDamage(damage, DMG_BULLET)
+            local effectData = EffectData()
+            effectData:SetOrigin(shieldHit.hitPos)
+            effectData:SetNormal((bulletData.Src - shieldHit.hitPos):GetNormalized())
+            effectData:SetScale(0.5)
+            util.Effect("AR2Impact", effectData)
+        end
+        return true
+    end
+end)
+
+-- ============================================================================
+-- ZONEN-SCHADEN: Alle Schadenstypen inkl. LVS, ArcCW, Gbomb, Hbomb, HL2-Bullets
+-- (DMG_GENERIC, BULLET, SLASH, SHOCK, BURN, BLAST, RADIATION, FALL, CLUB, CRUSH, Area)
 -- ============================================================================
 
 hook.Add("EntityTakeDamage", "EGC_Shield_ExplosionDamage", function(target, dmginfo)
     if not IsValid(target) then return end
     
     local dmgType = dmginfo:GetDamageType()
-    if bit.band(dmgType, DMG_BLAST) == 0 then return end  -- Nur Explosionen
-    
     local dmgPos = dmginfo:GetDamagePosition()
     if not dmgPos or dmgPos == Vector(0,0,0) then
         dmgPos = target:GetPos()
     end
+
+    -- Zonen ermitteln, die getroffen werden (kein Filter nach Schadenstyp – alle Typen wirken):
+    -- 1) Trefferpunkt liegt im Polygon
+    -- 2) Toleranzradius für alle Typen (Area/Nahbereich)
+    -- 3) Explosionsradius zusätzlich bei DMG_BLAST
+    local zonesToDamage = {}
+    local zones = EGC_SHIP.DamageZones or {}
+    for i, zone in ipairs(zones) do
+        local verts = zone.vertices
+        if verts and #verts >= 3 and EGC_SHIP.PointInPolygon3D(verts, dmgPos) then
+            zonesToDamage[i] = true
+        end
+    end
+    local toleranceRadius = (EGC_SHIP.Config and EGC_SHIP.Config.ZoneDamageToleranceRadius) or 80
+    for _, idx in ipairs(EGC_SHIP.FindZonesInRadius(dmgPos, toleranceRadius)) do
+        zonesToDamage[idx] = true
+    end
+    local explosionRadius = (EGC_SHIP.Config and EGC_SHIP.Config.ZoneExplosionRadius) or 450
+    if bit.band(dmgType, DMG_BLAST) ~= 0 then
+        for _, idx in ipairs(EGC_SHIP.FindZonesInRadius(dmgPos, explosionRadius)) do
+            zonesToDamage[idx] = true
+        end
+    end
+
+    local damage = dmginfo:GetDamage()
+    if not damage or damage <= 0 then damage = 0 end
+    local cfg = EGC_SHIP.Config or {}
+    -- Realistisch skalieren: Kugeln/Schüsse wenig, Explosionen je nach Stärke mehr (RPG < Nuke)
+    if bit.band(dmgType, DMG_BULLET) ~= 0 then
+        damage = math.max(damage, cfg.ZoneBulletDamageMin or 2) * (cfg.ZoneBulletDamageMultiplier or 0.08)
+    elseif bit.band(dmgType, DMG_BLAST) ~= 0 then
+        damage = math.max(damage, cfg.ZoneExplosionDamageMin or 5)
+        if cfg.ZoneExplosionScaleByAmount then
+            local ref = math.max(1, cfg.ZoneExplosionScaleRef or 300)
+            local scale = 0.4 + math.min(damage / ref, 2.6)  -- 0.4 bei wenig, bis ~3 bei großer Explosion
+            damage = damage * (cfg.ZoneExplosionDamageMultiplier or 1) * scale
+        else
+            damage = damage * (cfg.ZoneExplosionDamageMultiplier or 1)
+        end
+    end
+    -- Schaden nur einmal pro Zonengruppe anwenden (gemeinsamer HP-Pool)
+    local groupsHit = {}
+    for zoneIndex, _ in pairs(zonesToDamage) do
+        local z = zones[zoneIndex]
+        if z then
+            local key = GetGroupKey(z, zoneIndex)
+            if not groupsHit[key] then groupsHit[key] = zoneIndex end
+        end
+    end
+    for _, zoneIndex in pairs(groupsHit) do
+        if damage > 0 then
+            local hadShield = EGC_SHIP.ApplyZoneDamage(zoneIndex, damage)
+            local z = EGC_SHIP.DamageZones[zoneIndex]
+            if hadShield then
+                local zone = EGC_SHIP.DamageZones[zoneIndex]
+                local hitNormal = (zone and zone.vertices and #zone.vertices >= 3) and EGC_SHIP.PolygonNormal(zone.vertices) or Vector(0, 0, 1)
+                if hitNormal:LengthSqr() < 0.01 then hitNormal = Vector(0, 0, 1) end
+                hitNormal = hitNormal:GetNormalized()
+                net.Start("EGC_ZoneShieldHit")
+                net.WriteUInt(zoneIndex, 16)
+                net.WriteVector(dmgPos)
+                net.WriteVector(hitNormal)
+                net.Broadcast()
+            end
+            local pool = z and EGC_SHIP.GetZoneGroupPool(z, zoneIndex)
+            if pool and pool.shieldHP <= 0 and hadShield then
+                for _, idx in ipairs(EGC_SHIP.GetZoneIndicesInGroup(zoneIndex)) do
+                    net.Start("EGC_ZoneShieldDepleted")
+                    net.WriteUInt(idx, 16)
+                    net.Broadcast()
+                end
+            end
+        end
+    end
+    if next(zonesToDamage) then
+        BroadcastDamageZonesSync()
+        -- Schaden am eigentlichen Ziel blockieren, da die Zone ihn übernommen hat
+        return true
+    end
+
+    -- Ab hier nur noch Explosionen für globalen Schild-Generator
+    if bit.band(dmgType, DMG_BLAST) == 0 then return end
     
     -- Prüfe ob Explosion durch Schild blockiert wird
     for entIndex, genData in pairs(EGC_SHIP.Generators) do

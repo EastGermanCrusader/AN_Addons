@@ -219,19 +219,16 @@ if CLIENT then
         local frame = vgui.Create("DFrame")
         frame:SetSize(w, h)
         frame:Center()
-        frame:SetTitle("Zone konfigurieren: " .. zoneLabel)
+        frame:SetTitle("Zone Konfiguration " .. zoneLabel)
         frame:SetVisible(true)
         frame:SetDraggable(true)
         frame:ShowCloseButton(true)
         frame:SetDeleteOnClose(true)
-        frame:MakePopup()
-        EGC_SHIP._zoneConfigFrame = frame
-
-        -- FIX: Fenster nimmt Tastatur und Maus an, damit Felder bearbeitbar sind
+        frame:SetSizable(false)
+        -- Eingabe explizit aktivieren (vor dem Befüllen der Kinder)
         frame:SetKeyboardInputEnabled(true)
         frame:SetMouseInputEnabled(true)
-
-        gui.EnableScreenClicker(true)
+        EGC_SHIP._zoneConfigFrame = frame
 
         local function closeFrame()
             gui.EnableScreenClicker(false)
@@ -336,6 +333,13 @@ if CLIENT then
             notification.AddLegacy("Zone " .. zoneIndex .. " aktualisiert", NOTIFY_GENERIC, 2)
             closeFrame()
         end
+
+        -- Maus freigeben und Fenster als Popup aktivieren – NACH allen Inhalten,
+        -- damit Klicks (Schließen, Ziehen, Felder) zuverlässig ankommen
+        gui.EnableScreenClicker(true)
+        frame:MakePopup()
+        frame:SetZPos(100)
+        frame:RequestFocus()
     end
 
     EGC_SHIP._zoneConfigLMBFrames = EGC_SHIP._zoneConfigLMBFrames or 0
@@ -346,6 +350,8 @@ if CLIENT then
             EGC_SHIP._zoneConfigLMBFrames = 0
             return
         end
+        -- Wenn das Konfig-Fenster offen ist, keine Schuss-Auswertung – Mausklicks sollen ans Fenster gehen
+        if IsValid(EGC_SHIP._zoneConfigFrame) then return end
 
         local lmbDown = input.IsMouseDown(MOUSE_LEFT)
         EGC_SHIP._zoneConfigLMBFrames = lmbDown and (math.min((EGC_SHIP._zoneConfigLMBFrames or 0) + 1, 10)) or 0
